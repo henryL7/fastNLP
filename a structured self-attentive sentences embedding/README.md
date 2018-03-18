@@ -16,6 +16,8 @@
 
 #### Training procedure. The coefficient for the penalization term is set to 1 during the training, following the paper. The learning rate is set to 0.06 and the momentum is set to 0.2 during the first three epochs. Then, the learning rate is set to 0.02 and the momentum is set to 0.6 for the next five epochs. 500K review-star pairs are used for training.
 
+#### During the training, the penalization term significantly dropped from approximately 10 to less than 0.1. It fits the paper's intuition that the penalization term would drive the model to attend to different parts of the comments.
+
 ### test.py
 
 #### Test for the classification accuracy. The model trained eight epochs reachs a 0.688 accuracy on a 50K test set.
