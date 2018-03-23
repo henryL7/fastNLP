@@ -1,5 +1,5 @@
 # Word2Idx
-## Build a word index according to word frequency. Assign every word an integer. 
+## Build a word index according to word frequency. 
 ### Parameters
 #### "words" should be a list [ w_1,w_2,...,w_i,...,w_n ] where each w_i is a string representing a word.
 #### If "min_freq" is given, then only words with a frequncy not lesser than min_freq will be kept.
