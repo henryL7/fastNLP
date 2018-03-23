@@ -3,9 +3,9 @@ import pickle
 
 class Word2Idx():
     """
-    Build a word index according to word frequencies.
+    Build a word index according to word frequency.
     If "min_freq" is given, then only words with a frequncy not lesser than min_freq will be kept.
-    If "max_num" is given, then at most the most frequent max_num words will be kept.
+    If "max_num" is given, then at most the most frequent $max_num words will be kept.
     "words" should be a list [ w_1,w_2,...,w_i,...,w_n ] where each w_i is a string representing a word.
     
     num is the size of the lookup table.
@@ -53,4 +53,3 @@ class Word2Idx():
 
 
 
-        
