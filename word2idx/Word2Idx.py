@@ -45,11 +45,16 @@ class Word2Idx():
 
     def save(self,addr):
         """save the model to a file with address "addr" """
-        pickle.dump(self,open(addr,"wb"))
+        f = open(addr,"wb")
+        pickle.dump([self.__i2w,self.__w2i,self.num],f)
+        f.close()
 
     def load(self,addr):
         """load a model from a file with address "addr" """
-        self = pickle.load(open(addr,"rb"))
+        f = open(addr,"rb")
+        paras = pickle.load(f)
+        self.__i2w,self.__w2i,self.num = paras[0],paras[1],paras[2]
+        f.close()
 
-
+    
 
