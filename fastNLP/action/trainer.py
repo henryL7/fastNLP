@@ -1,10 +1,13 @@
+import _pickle
 from collections import namedtuple
 
 import numpy as np
 import torch
 
 from fastNLP.action.action import Action
+from fastNLP.action.action import RandomSampler, Batchifier
 from fastNLP.action.tester import Tester
+from fastNLP.modules.utils import seq_mask
 
 
 class BaseTrainer(Action):
@@ -19,24 +22,26 @@ class BaseTrainer(Action):
         - grad_backward
         - get_loss
     """
-    TrainConfig = namedtuple("config", ["epochs", "validate", "save_when_better",
-                                        "log_per_step", "log_validation", "batch_size"])
+    TrainConfig = namedtuple("config", ["epochs", "validate", "batch_size", "pickle_path"])
 
     def __init__(self, train_args):
         """
         training parameters
         """
         super(BaseTrainer, self).__init__()
+        self.train_args = train_args
         self.n_epochs = train_args.epochs
-        self.validate = train_args.validate
+        # self.validate = train_args.validate
         self.batch_size = train_args.batch_size
+        self.pickle_path = train_args.pickle_path
         self.model = None
+        self.iterator = None
+        self.loss_func = None
+        self.optimizer = None
 
-    def train(self, network, train_data, dev_data=None):
+    def train(self, network):
         """General training loop.
         :param network: a model
-        :param train_data: raw data for training
-        :param dev_data: raw data for validation
 
         The method is framework independent.
         Work by calling the following methods:
@@ -50,22 +55,21 @@ class BaseTrainer(Action):
         Subclasses must implement these methods with a specific framework.
         """
         self.model = network
-        train_x, train_y = self.prepare_input(train_data)
-
-        iterations, train_batch_generator = self.batchify(self.batch_size, train_x, train_y)
+        data_train, data_dev, data_test, embedding = self.prepare_input(self.pickle_path)
 
         test_args = Tester.TestConfig(save_output=True, validate_in_training=True,
                                       save_dev_input=True, save_loss=True, batch_size=self.batch_size)
         evaluator = Tester(test_args)
 
         best_loss = 1e10
+        iterations = len(data_train) // self.batch_size
 
         for epoch in range(self.n_epochs):
-            self.mode(test=False)  # turn on the train mode
+            self.mode(test=False)
 
             self.define_optimizer()
             for step in range(iterations):
-                batch_x, batch_y = train_batch_generator.__next__()
+                batch_x, batch_y = self.batchify(self.batch_size, data_train)
 
                 prediction = self.data_forward(network, batch_x)
 
@@ -74,21 +78,23 @@ class BaseTrainer(Action):
                 self.update()
 
             if self.validate:
-                if dev_data is None:
+                if data_dev is None:
                     raise RuntimeError("No validation data provided.")
-                evaluator.test(network, dev_data)
+                evaluator.test(network, data_dev)
                 if evaluator.loss < best_loss:
                     best_loss = evaluator.loss
 
         # finish training
 
-    def prepare_input(self, data):
+    def prepare_input(self, data_path):
         """
-        Perform data transformation from raw input to vector/matrix inputs.
-        :param data: raw inputs
-        :return (X, Y): tuple, input features and labels
+            To do: Load pkl files of train/dev/test and embedding
         """
-        raise NotImplementedError
+        data_train = _pickle.load(open(data_path + "data_train.pkl", "rb"))
+        data_dev = _pickle.load(open(data_path + "data_dev.pkl", "rb"))
+        data_test = _pickle.load(open(data_path + "data_test.pkl", "rb"))
+        embedding = _pickle.load(open(data_path + "embedding.pkl", "rb"))
+        return data_train, data_dev, data_test, embedding
 
     def mode(self, test=False):
         """
@@ -138,7 +144,57 @@ class BaseTrainer(Action):
         :param truth: ground truth label vector
         :return: a scalar
         """
+        if self.loss_func is None:
+            if hasattr(self.model, "loss"):
+                self.loss_func = self.model.loss
+            else:
+                self.define_loss()
+        return self.loss_func(predict, truth)
+
+    def define_loss(self):
+        """
+            Assign an instance of loss function to self.loss_func
+            E.g. self.loss_func = nn.CrossEntropyLoss()
+        """
         raise NotImplementedError
+
+    def batchify(self, batch_size, data):
+        """
+        1. Perform batching from data and produce a batch of training data.
+        2. Add padding.
+        :param batch_size: int, the size of a batch
+        :param data: list. Each entry is a sample, which is also a list of features and label(s).
+            E.g.
+                [
+                    [[word_11, word_12, word_13], [label_11. label_12]],  # sample 1
+                    [[word_21, word_22, word_23], [label_21. label_22]],  # sample 2
+                    ...
+                ]
+        :return batch_x: list. Each entry is a list of features of a sample.
+                 batch_y: list. Each entry is a list of labels of a sample.
+        """
+        if self.iterator is None:
+            self.iterator = iter(Batchifier(RandomSampler(data), batch_size, drop_last=True))
+        indices = next(self.iterator)
+        batch = [data[idx] for idx in indices]
+        batch_x = [sample[0] for sample in batch]
+        batch_y = [sample[1] for sample in batch]
+        batch_x = self.pad(batch_x)
+        return batch_x, batch_y
+
+    @staticmethod
+    def pad(batch, fill=0):
+        """
+        Pad a batch of samples to maximum length.
+        :param batch: list of list
+        :param fill: word index to pad, default 0.
+        :return: a padded batch
+        """
+        max_length = max([len(x) for x in batch])
+        for idx, sample in enumerate(batch):
+            if len(sample) < max_length:
+                batch[idx] = sample + [fill * (max_length - len(sample))]
+        return batch
 
 
 class ToyTrainer(BaseTrainer):
@@ -260,9 +316,61 @@ class WordSegTrainer(BaseTrainer):
         self.optimizer.step()
 
 
+class POSTrainer(BaseTrainer):
+    TrainConfig = namedtuple("config", ["epochs", "batch_size", "pickle_path", "num_classes", "vocab_size"])
+
+    def __init__(self, train_args):
+        super(POSTrainer, self).__init__(train_args)
+        self.vocab_size = train_args.vocab_size
+        self.num_classes = train_args.num_classes
+        self.max_len = None
+        self.mask = None
+        self.batch_x = None
+
+    def prepare_input(self, data_path):
+        """
+            To do: Load pkl files of train/dev/test and embedding
+        """
+        data_train = _pickle.load(open(data_path + "/data_train.pkl", "rb"))
+        data_dev = _pickle.load(open(data_path + "/data_train.pkl", "rb"))
+        return data_train, data_dev, 0, 1
+
+    def data_forward(self, network, x):
+        seq_len = [len(seq) for seq in x]
+        x = torch.LongTensor(x)
+        self.batch_size = x.size(0)
+        self.max_len = x.size(1)
+        self.mask = seq_mask(seq_len, self.max_len)
+        x = network(x)
+        self.batch_x = x
+        return x
+
+    def mode(self, test=False):
+        if test:
+            self.model.eval()
+        else:
+            self.model.train()
+
+    def define_optimizer(self):
+        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01, momentum=0.9)
+
+    def get_loss(self, predict, truth):
+        """
+        Compute loss given prediction and ground truth.
+        :param predict: prediction label vector
+        :param truth: ground truth label vector
+        :return: a scalar
+        """
+        if self.loss_func is None:
+            if hasattr(self.model, "loss"):
+                self.loss_func = self.model.loss
+            else:
+                self.define_loss()
+        return self.loss_func(self.batch_x, predict, self.mask, self.batch_size, self.max_len)
+
+
 if __name__ == "__name__":
-    Config = namedtuple("config", ["epochs", "validate", "save_when_better", "log_per_step",
-                                   "log_validation", "batch_size"])
-    train_config = Config(epochs=5, validate=True, save_when_better=True, log_per_step=10, log_validation=True,
-                          batch_size=32)
-    trainer = ToyTrainer(train_config)
+    train_args = BaseTrainer.TrainConfig(epochs=1, validate=False, batch_size=3, pickle_path="./")
+    trainer = BaseTrainer(train_args)
+    data_train = [[[1, 2, 3, 4], [0]] * 10] + [[[1, 3, 5, 2], [1]] * 10]
+    trainer.batchify(batch_size=3, data=data_train)
